@@ -1,0 +1,111 @@
+openapi: 3.0.3
+info:
+  title: Bigfoot CA API
+  version: "0.1.0-P0"
+  description: >
+    사설 CA · 파일 전자서명 어플라이언스(평면2/3 제어 서비스).
+    인증은 미적용(P0) — docs/AUTH-PLAN.md 참조. 모든 쓰기는 감사 해시체인에 기록됩니다.
+servers:
+  - url: http://localhost:9100
+tags:
+  - name: health
+  - name: ca
+  - name: recipients
+  - name: signing
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: 상태 점검(CA 도달성·FIPS·감사 무결성)
+      responses: { "200": { description: OK } }
+
+  /api/ca/info:
+    get: { tags: [ca], summary: 신뢰앵커 요약 + step-ca 도달성 + 프로파일, responses: { "200": { description: OK } } }
+  /api/ca/certs:
+    get: { tags: [ca], summary: 발급 인증서 목록(SoR), responses: { "200": { description: OK } } }
+  /api/ca/crl:
+    get: { tags: [ca], summary: CRL(DER) 패스스루, responses: { "200": { description: application/pkix-crl } } }
+  /api/ca/root:
+    get: { tags: [ca], summary: Root PEM 다운로드(신뢰앵커), responses: { "200": { description: PEM } } }
+  /api/ca/issuer:
+    get: { tags: [ca], summary: Issuer(중간) PEM 다운로드, responses: { "200": { description: PEM } } }
+  /api/ca/audit:
+    get: { tags: [ca], summary: 감사 이벤트(최신순) + 해시체인 무결성, responses: { "200": { description: OK } } }
+  /api/ca/audit/verify:
+    get: { tags: [ca], summary: 감사 해시체인 검증(변조 탐지), responses: { "200": { description: OK } } }
+
+  /api/ca/issue:
+    post:
+      tags: [ca]
+      summary: 인증서 발급(서버 키 생성, 개인키 미반환)
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: {
+          profile: { type: string, enum: [tls, client, codesign] },
+          cn: { type: string }, sans: { type: array, items: { type: string } }, notAfter: { type: string } },
+          required: [cn] } } }
+      responses: { "200": { description: 발급됨 }, "400": { description: cn 필수 } }
+  /api/ca/sign-csr:
+    post:
+      tags: [ca]
+      summary: 고객 CSR 서명(개인키 미노출)
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: {
+          profile: { type: string }, csr: { type: string }, notAfter: { type: string } }, required: [csr] } } }
+      responses: { "200": { description: 서명된 인증서 PEM } }
+  /api/ca/revoke:
+    post:
+      tags: [ca]
+      summary: 인증서 폐기(CRL 반영)
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { Serial: { type: string }, Reason: { type: string } }, required: [Serial] } } }
+      responses: { "200": { description: 폐기됨 } }
+  /api/ca/reissue:
+    post:
+      tags: [ca]
+      summary: 동일 CN 재발급
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { serial: { type: string }, notAfter: { type: string } }, required: [serial] } } }
+      responses: { "200": { description: 재발급됨 } }
+
+  /api/recipients:
+    get: { tags: [recipients], summary: 수신자 인증서 목록, responses: { "200": { description: OK } } }
+    post:
+      tags: [recipients]
+      summary: 수신자 공개 인증서 임포트(개인키 미보관)
+      requestBody: { content: { application/json: { schema: { type: object, properties: { cert: { type: string } }, required: [cert] } } } }
+      responses: { "200": { description: 임포트됨 } }
+  /api/recipients/{id}:
+    delete:
+      tags: [recipients]
+      summary: 수신자 삭제
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: 삭제됨 } }
+
+  /api/sign:
+    post:
+      tags: [signing]
+      summary: 파일 서명(단명 codesign 인증서 → CMS .p7s)
+      parameters:
+        - { name: cn, in: query, schema: { type: string } }
+        - { name: profile, in: query, schema: { type: string } }
+        - { name: filename, in: query, schema: { type: string } }
+        - { name: notAfter, in: query, schema: { type: string } }
+      requestBody: { content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+      responses: { "200": { description: "application/pkcs7-signature (.p7s)" } }
+  /api/verify:
+    post:
+      tags: [signing]
+      summary: .p7s 검증(신뢰앵커 기준) + 원문 다이제스트
+      requestBody: { content: { application/pkcs7-signature: { schema: { type: string, format: binary } } } }
+      responses: { "200": { description: 유효 }, "422": { description: 무효 } }
+  /api/encrypt:
+    post:
+      tags: [signing]
+      summary: 파일 서명+암호화(수신자 인증서 → CMS .p7m)
+      parameters:
+        - { name: recipient, in: query, required: true, schema: { type: string }, description: 수신자 지문 ID(반복 가능) }
+        - { name: sign, in: query, schema: { type: string, enum: ["true","false"] } }
+        - { name: cn, in: query, schema: { type: string } }
+        - { name: filename, in: query, schema: { type: string } }
+      requestBody: { content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+      responses: { "200": { description: "application/pkcs7-mime (.p7m)" } }

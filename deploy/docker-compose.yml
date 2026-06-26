@@ -1,0 +1,57 @@
+# Bigfoot CA 스택 — 평면1(step-ca) + 평면2/3(bigfoot).
+#  장애 격리: bigfoot 가 죽어도 step-ca 의 검증/CRL/갱신은 독립 생존(포트 28443 직접).
+#  최초 1회: scripts/bootstrap.sh 로 ca-password 생성 → step-ca init → 루트/중간 추출 +
+#            EKU provisioner(tls/client/codesign) 등록 + crl 활성. README 참조.
+services:
+  # ── 평면1: 발급 엔진 + CRL (독립·상시) ──
+  step-ca:
+    image: smallstep/step-ca:latest
+    pull_policy: missing
+    environment:
+      DOCKER_STEPCA_INIT_NAME: "Bigfoot Issuing CA"
+      DOCKER_STEPCA_INIT_DNS_NAMES: "step-ca,localhost,bigfoot"
+      DOCKER_STEPCA_INIT_PROVISIONER_NAME: "bigfoot"
+      DOCKER_STEPCA_INIT_PASSWORD_FILE: "/run/secrets/ca-password"
+      DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT: "false"
+    ports: ["28444:9000"]   # 검증자·CI 직접 접근(REST/ACME/CRL). (28443 은 다른 스택이 사용 중일 수 있어 28444)
+    volumes:
+      - stepca-data:/home/step
+      - ./stepca/ca-password:/run/secrets/ca-password:ro
+    restart: unless-stopped
+
+  # ── 평면2/3: 제어/서명/관리 (이 콘솔) ──
+  bigfoot:
+    image: chrismarspink/bigfoot-ca:${BIGFOOT_TAG:-latest}   # Docker Hub. 로컬 dev 는 build.sh 가 동명 태그로 덮어씀
+    pull_policy: missing                                     # 로컬에 있으면 그대로, 없으면 Hub 에서 pull
+    ports: ["9100:9100"]
+    environment:
+      ADDR: ":9100"
+      STEPCA_URL: https://step-ca:9000
+      STEPCA_ROOT: /etc/bigfoot/step-root.crt
+      STEPCA_ISSUER: /etc/bigfoot/step-issuer.crt
+      STEPCA_PROVISIONER: bigfoot
+      STEPCA_PROVISIONER_PASSWORD_FILE: /etc/bigfoot/ca-password
+      # EKU 분리 provisioner (bootstrap.sh 가 생성). 미생성 시 기본 provisioner 로 폴백.
+      PROVISIONER_TLS: bigfoot-tls
+      PROVISIONER_CLIENT: bigfoot-client
+      PROVISIONER_CODESIGN: bigfoot-codesign
+      SOR_PATH: /var/lib/bigfoot/sor.jsonl
+      RECIPIENTS_PATH: /var/lib/bigfoot/recipients.json
+      CMS_CONTENT_CIPHER: "-aes-256-gcm"
+      CMS_RSA_PADDING: oaep
+      # 운영 권장: HTTPS. 인증서/키 마운트 후 아래 2줄 설정.
+      # TLS_CERT: /etc/bigfoot/tls.crt
+      # TLS_KEY: /etc/bigfoot/tls.key
+    volumes:
+      - ./stepca/root_ca.crt:/etc/bigfoot/step-root.crt:ro    # 신뢰 앵커(bootstrap 가 추출)
+      - ./stepca/issuer_ca.crt:/etc/bigfoot/step-issuer.crt:ro # 발급(중간) CA
+      - ./stepca/ca-password:/etc/bigfoot/ca-password:ro       # provisioner 비밀번호
+      - bigfoot-data:/var/lib/bigfoot                          # 감사 SoR + 수신자 레지스트리(쓰기)
+    depends_on:
+      step-ca:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  stepca-data:
+  bigfoot-data:

@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bigfoot CA — 관리 콘솔</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e9ef; --mut:#9aa3b2; --acc:#4f8cff; --ok:#3fb950; --bad:#f85149; --warn:#d29922; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--fg); display:flex; flex-direction:column; min-height:100vh; }
+  header { display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:16px; margin:0; font-weight:650; }
+  header .sub { color:var(--mut); font-size:12px; }
+  header .stat { margin-left:auto; display:flex; gap:14px; font-size:12px; color:var(--mut); }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; vertical-align:middle; }
+  .dot.ok{background:var(--ok)} .dot.bad{background:var(--bad)} .dot.warn{background:var(--warn)}
+  .layout { display:flex; flex:1; min-height:0; }
+  nav.sidebar { display:flex; flex-direction:column; gap:2px; width:200px; flex:0 0 200px; padding:12px 8px; border-right:1px solid var(--line); background:var(--panel); }
+  nav.sidebar button { text-align:left; background:none; border:none; color:var(--mut); padding:9px 12px; cursor:pointer; font-size:13px; border-radius:7px; border-left:3px solid transparent; }
+  nav.sidebar button:hover { color:var(--fg); background:#1d212a; }
+  nav.sidebar button.active { color:var(--fg); background:#1d212a; border-left-color:var(--acc); }
+  main { flex:1; min-width:0; padding:20px; max-width:1080px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:16px; }
+  .card h2 { margin:0 0 4px; font-size:15px; }
+  .card p.desc { margin:0 0 14px; color:var(--mut); font-size:12.5px; }
+  label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; }
+  input, select, textarea { width:100%; background:#0c0e12; border:1px solid var(--line); color:var(--fg); border-radius:7px; padding:8px 10px; font:inherit; }
+  textarea { min-height:90px; font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  button.act { background:var(--acc); border:none; color:#fff; padding:8px 16px; border-radius:7px; cursor:pointer; font-size:13px; margin-top:12px; }
+  button.act.danger { background:var(--bad); }
+  button.ghost { background:none; border:1px solid var(--line); color:var(--fg); padding:6px 12px; border-radius:7px; cursor:pointer; font-size:12px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--mut); font-weight:600; }
+  .tag { font-size:11px; padding:2px 7px; border-radius:20px; border:1px solid var(--line); }
+  .tag.valid{color:var(--ok); border-color:var(--ok)} .tag.revoked{color:var(--bad); border-color:var(--bad)}
+  .mono { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--mut); }
+  .out { background:#0c0e12; border:1px solid var(--line); border-radius:7px; padding:10px; margin-top:12px; white-space:pre-wrap; font-family:ui-monospace,Menlo,monospace; font-size:12px; max-height:280px; overflow:auto; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .hidden { display:none; }
+  .manual h3 { margin:18px 0 6px; font-size:14px; }
+  .manual h3:first-child { margin-top:0; }
+  .manual code { background:#0c0e12; padding:1px 5px; border-radius:4px; font-size:12px; }
+  .manual pre { background:#0c0e12; border:1px solid var(--line); border-radius:7px; padding:12px; overflow:auto; font-size:12px; }
+  .manual ul { margin:6px 0; padding-left:20px; } .manual li { margin:3px 0; }
+  .note { font-size:12px; color:var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐾 Bigfoot CA</h1>
+  <span class="sub">사설 CA · 파일 전자서명 어플라이언스</span>
+  <div class="stat" id="stat">상태 확인 중…</div>
+</header>
+<div class="layout">
+  <nav id="nav" class="sidebar"></nav>
+  <main id="main"></main>
+</div>
+
+<script>
+const API = '';
+const tabs = [
+  ['overview','개요'], ['certs','인증서'], ['issue','발급'],
+  ['sign','파일 서명'], ['recipients','수신자'], ['approvals','승인'], ['audit','감사'], ['manual','매뉴얼'],
+];
+let active = 'overview';
+
+async function api(path, opts={}) {
+  const r = await fetch(API+path, opts);
+  const ct = r.headers.get('content-type')||'';
+  if (ct.includes('application/json')) { const j = await r.json(); if(!r.ok) throw new Error(j.error||JSON.stringify(j)); return j; }
+  if (!r.ok) throw new Error('HTTP '+r.status);
+  return r;
+}
+function el(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstChild; }
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+async function refreshStat(){
+  try{
+    const h = await api('/healthz');
+    const ca = h.caReady ? (h.caReachable?'<span class="dot ok"></span>step-ca 연결':'<span class="dot bad"></span>step-ca 불통') : '<span class="dot warn"></span>CA 미구성';
+    const fips = h.fips && h.fips.active ? '<span class="dot ok"></span>FIPS' : '<span class="dot warn"></span>FIPS 미적용';
+    const aud = h.auditIntegrity ? '<span class="dot ok"></span>감사 무결' : '<span class="dot bad"></span>감사 변조의심';
+    document.getElementById('stat').innerHTML = ca+'<span>'+fips+'</span><span>'+aud+'</span>';
+  }catch(e){ document.getElementById('stat').innerHTML='<span class="dot bad"></span>오프라인'; }
+}
+
+const views = {};
+
+views.overview = async () => {
+  const m = document.getElementById('main'); m.innerHTML='';
+  let info={};
+  try{ info = await api('/api/ca/info'); }catch(e){}
+  const profiles = info.profiles ? Object.values(info.profiles).map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.eku)}</td><td class="mono">${esc(p.defaultDur)}</td><td>${esc(p.desc)}</td></tr>`).join('') : '';
+  m.append(el(`<div class="card">
+    <h2>신뢰 앵커 (Root CA)</h2>
+    <p class="desc">수신자는 이 루트 인증서 하나만 사전 신뢰하면 Bigfoot 서명을 검증·복호할 수 있습니다 (N×M 키분배 회피).</p>
+    <table>
+      <tr><th>활성</th><td>${info.enabled?'예':'아니오 (신뢰앵커 미마운트)'}</td></tr>
+      <tr><th>Root 주체</th><td class="mono">${esc(info.rootSubject||'-')}</td></tr>
+      <tr><th>Root 만료</th><td class="mono">${esc(info.rootNotAfter||'-')}</td></tr>
+      <tr><th>Root 지문(SHA-256)</th><td class="mono">${esc(info.rootFingerprint||'-')}</td></tr>
+      <tr><th>step-ca 도달성</th><td>${info.reachable?'<span class="dot ok"></span>연결':'<span class="dot bad"></span>불통'}</td></tr>
+    </table>
+    <button class="ghost" onclick="location.href='/api/ca/root'">Root PEM 다운로드</button>
+    <button class="ghost" onclick="location.href='/api/ca/issuer'">Issuer PEM 다운로드</button>
+    <button class="ghost" onclick="location.href='/api/ca/crl'">CRL 다운로드</button>
+  </div>`));
+  if(profiles) m.append(el(`<div class="card"><h2>인증서 프로파일 (EKU)</h2>
+    <p class="desc">발급 용도별 키 사용목적. codesign 은 파일/코드 전자서명용입니다.</p>
+    <table><tr><th>프로파일</th><th>EKU</th><th>기본수명</th><th>설명</th></tr>${profiles}</table></div>`));
+};
+
+views.certs = async () => {
+  const m = document.getElementById('main'); m.innerHTML='';
+  const {certs} = await api('/api/ca/certs');
+  const rows = (certs||[]).map(c=>`<tr>
+    <td class="mono">${esc(c.serial)}</td><td>${esc(c.subject)}</td><td>${esc(c.profile||'-')}</td>
+    <td class="mono">${esc(c.notAfter)}</td><td><span class="tag ${c.status}">${c.status}</span></td>
+    <td>${c.status==='valid'?`<button class="ghost" onclick="doRevoke('${c.serial}')">폐기</button> <button class="ghost" onclick="doReissue('${c.serial}')">재발급</button>`:''}</td>
+  </tr>`).join('');
+  m.append(el(`<div class="card"><h2>발급 인증서</h2>
+    <p class="desc">SoR(감사 기록) 기반 목록. 폐기 시 CRL 에 반영됩니다.</p>
+    <table><tr><th>시리얼</th><th>주체</th><th>프로파일</th><th>만료</th><th>상태</th><th></th></tr>${rows||'<tr><td colspan=6 class=mut>발급 이력 없음</td></tr>'}</table></div>`));
+};
+window.doRevoke = async (serial) => {
+  if(!confirm('인증서 '+serial+' 를 폐기하시겠습니까? (CRL 반영)')) return;
+  const reason = prompt('폐기 사유(선택):','')||'';
+  try{ await api('/api/ca/revoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Serial:serial,Reason:reason})}); views.certs(); }catch(e){ alert(e.message); }
+};
+window.doReissue = async (serial) => {
+  if(!confirm('동일 주체(CN)로 재발급하시겠습니까?')) return;
+  try{ const r=await api('/api/ca/reissue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serial})}); alert('재발급 완료: '+r.serial); views.certs(); }catch(e){ alert(e.message); }
+};
+
+views.issue = async () => {
+  const m = document.getElementById('main'); m.innerHTML='';
+  let info={}; try{ info=await api('/api/ca/info'); }catch(e){}
+  const opts = info.profiles ? Object.values(info.profiles).map(p=>`<option value="${p.name}">${p.name} — ${p.eku}</option>`).join('') : '';
+  m.append(el(`<div class="card"><h2>인증서 발급 (서버 키 생성)</h2>
+    <p class="desc">Bigfoot 이 키쌍을 생성·서명합니다. 개인키는 응답에 포함되지 않습니다(서버 보관).</p>
+    <label>프로파일</label><select id="i-prof">${opts}</select>
+    <label>CN (공통이름)</label><input id="i-cn" placeholder="example.local / release-signer">
+    <label>SAN (쉼표 구분, 선택)</label><input id="i-san" placeholder="dns:host1, ip:10.0.0.1">
+    <label>수명 (선택, 예 24h / 8760h)</label><input id="i-na" placeholder="프로파일 기본값">
+    <button class="act" onclick="doIssue()">발급</button>
+    <div id="i-out" class="out hidden"></div></div>`));
+  m.append(el(`<div class="card"><h2>고객 CSR 서명 (키 미노출)</h2>
+    <p class="desc">고객이 개인키를 보유하고 CSR 만 제출 → Bigfoot 이 서명. 개인키가 서버에 노출되지 않습니다.</p>
+    <label>프로파일</label><select id="c-prof">${opts}</select>
+    <label>CSR (PEM)</label><textarea id="c-csr" placeholder="-----BEGIN CERTIFICATE REQUEST-----"></textarea>
+    <label>수명 (선택)</label><input id="c-na" placeholder="프로파일 기본값">
+    <button class="act" onclick="doSignCsr()">CSR 서명</button>
+    <div id="c-out" class="out hidden"></div></div>`));
+};
+window.doIssue = async () => {
+  const sans = document.getElementById('i-san').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const body = {profile:document.getElementById('i-prof').value, cn:document.getElementById('i-cn').value, sans, notAfter:document.getElementById('i-na').value};
+  const o=document.getElementById('i-out'); o.classList.remove('hidden');
+  try{ const r=await api('/api/ca/issue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); o.textContent=JSON.stringify(r,null,2);}catch(e){ o.textContent='오류: '+e.message; }
+};
+window.doSignCsr = async () => {
+  const body = {profile:document.getElementById('c-prof').value, csr:document.getElementById('c-csr').value, notAfter:document.getElementById('c-na').value};
+  const o=document.getElementById('c-out'); o.classList.remove('hidden');
+  try{ const r=await api('/api/ca/sign-csr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); o.textContent=r.cert||JSON.stringify(r,null,2);}catch(e){ o.textContent='오류: '+e.message; }
+};
+
+views.sign = async () => {
+  const m = document.getElementById('main'); m.innerHTML='';
+  m.append(el(`<div class="card"><h2>파일 서명 (.p7s)</h2>
+    <p class="desc">파일을 업로드하면 단명 codesign 인증서로 CMS 서명(.p7s)을 생성합니다. 검증자는 루트만으로 검증 가능합니다.</p>
+    <label>서명할 파일</label><input type="file" id="s-file">
+    <label>서명자 CN (선택)</label><input id="s-cn" placeholder="bigfoot-file-signer">
+    <button class="act" onclick="doSign()">서명 → .p7s 다운로드</button>
+    <div id="s-out" class="out hidden"></div></div>`));
+  m.append(el(`<div class="card"><h2>서명 검증</h2>
+    <p class="desc">.p7s 파일을 업로드해 신뢰 앵커(루트)로 검증합니다.</p>
+    <label>.p7s 파일</label><input type="file" id="v-file">
+    <button class="act" onclick="doVerify()">검증</button>
+    <div id="v-out" class="out hidden"></div></div>`));
+  let recips=[]; try{ recips=(await api('/api/recipients')).recipients||[]; }catch(e){}
+  const ropts = recips.map(r=>`<label style="color:var(--fg)"><input type=checkbox value="${r.id}"> ${esc(r.subject)}</label>`).join('')||'<span class="note">수신자 탭에서 인증서를 먼저 임포트하세요.</span>';
+  m.append(el(`<div class="card"><h2>서명+암호화 패키지 (.p7m)</h2>
+    <p class="desc">파일을 서명 후 선택한 수신자 공개 인증서로 암호화(.p7m). 수신자만 복호할 수 있습니다.</p>
+    <label>파일</label><input type="file" id="e-file">
+    <label>수신자</label><div id="e-recips">${ropts}</div>
+    <button class="act" onclick="doEncrypt()">서명+암호화 → .p7m</button>
+    <div id="e-out" class="out hidden"></div></div>`));
+};
+async function postFile(path, file, out){
+  out.classList.remove('hidden'); out.textContent='처리 중…';
+  const r = await fetch(API+path,{method:'POST',body:file});
+  if(r.headers.get('content-type','').includes('application/json')){ const j=await r.json(); out.textContent=JSON.stringify(j,null,2); return; }
+  const blob = await r.blob(); const cd=r.headers.get('content-disposition')||''; const fn=(cd.match(/filename=(.+)$/)||[])[1]||'out.bin';
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fn; a.click();
+  out.textContent='다운로드: '+fn+'  (서명 시리얼 '+(r.headers.get('X-Bigfoot-Serial')||'-')+', FIPS '+(r.headers.get('X-Bigfoot-Fips')||'-')+')';
+}
+window.doSign = async () => {
+  const f=document.getElementById('s-file').files[0]; if(!f) return alert('파일을 선택하세요');
+  const cn=encodeURIComponent(document.getElementById('s-cn').value||'');
+  try{ await postFile('/api/sign?filename='+encodeURIComponent(f.name+'.p7s')+(cn?'&cn='+cn:''), f, document.getElementById('s-out')); }catch(e){ document.getElementById('s-out').textContent='오류: '+e.message; }
+};
+window.doVerify = async () => {
+  const f=document.getElementById('v-file').files[0]; if(!f) return alert('.p7s 파일 선택');
+  const o=document.getElementById('v-out'); o.classList.remove('hidden'); o.textContent='검증 중…';
+  try{ const r=await fetch(API+'/api/verify',{method:'POST',body:f}); o.textContent=JSON.stringify(await r.json(),null,2); }catch(e){ o.textContent='오류: '+e.message; }
+};
+window.doEncrypt = async () => {
+  const f=document.getElementById('e-file').files[0]; if(!f) return alert('파일 선택');
+  const ids=[...document.querySelectorAll('#e-recips input:checked')].map(c=>c.value);
+  if(!ids.length) return alert('수신자를 1명 이상 선택하세요');
+  const qs='filename='+encodeURIComponent(f.name+'.p7m')+ids.map(i=>'&recipient='+encodeURIComponent(i)).join('');
+  try{ await postFile('/api/encrypt?'+qs, f, document.getElementById('e-out')); }catch(e){ document.getElementById('e-out').textContent='오류: '+e.message; }
+};
+
+views.recipients = async () => {
+  const m = document.getElementById('main'); m.innerHTML='';
+  const {recipients} = await api('/api/recipients');
+  const rows=(recipients||[]).map(r=>`<tr><td>${esc(r.subject)}</td><td class="mono">${esc(r.notAfter)}</td><td class="mono">${esc(r.id.slice(0,16))}…</td><td><button class="ghost" onclick="doDelRecip('${r.id}')">삭제</button></td></tr>`).join('');
+  m.append(el(`<div class="card"><h2>수신자 인증서 임포트</h2>
+    <p class="desc">외부 수신자의 공개 인증서(PEM)를 등록합니다. 개인키는 보관하지 않습니다. 암호화 패키지(.p7m)의 수신자로 사용됩니다.</p>
+    <label>인증서 (PEM)</label><textarea id="r-cert" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+    <button class="act" onclick="doImportRecip()">임포트</button>
+    <div id="r-out" class="out hidden"></div></div>`));
+  m.append(el(`<div class="card"><h2>등록된 수신자</h2>
+    <table><tr><th>주체</th><th>만료</th><th>지문</th><th></th></tr>${rows||'<tr><td colspan=4>없음</td></tr>'}</table></div>`));
+};
+window.doImportRecip = async () => {
+  const o=document.getElementById('r-out'); o.classList.remove('hidden');
+  try{ const r=await api('/api/recipients',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cert:document.getElementById('r-cert').value})}); o.textContent=JSON.stringify(r,null,2); views.recipients(); }catch(e){ o.textContent='오류: '+e.message; }
+};
+window.doDelRecip = async (id) => { if(!confirm('삭제?'))return; await api('/api/recipients/'+id,{method:'DELETE'}); views.recipients(); };
+
+views.approvals = async () => {
+  const m = document.getElementById('main'); m.innerHTML='';
+  const {approvals, enforce} = await api('/api/approvals');
+  m.append(el(`<div class="card"><h2>발급/폐기 요청 (4-eyes)</h2>
+    <p class="desc">요청을 생성하면 ${enforce?'<b>(직접 발급 차단됨 — 승인 필수)</b> ':''}다른 사람이 승인해야 실행됩니다. 요청자와 승인자는 동일할 수 없습니다.</p>
+    <div class="grid2">
+      <div>
+        <label>요청 종류</label><select id="a-action"><option value="issue">발급(issue)</option><option value="revoke">폐기(revoke)</option></select>
+        <label>파라미터 (JSON)</label><textarea id="a-params" placeholder='{"profile":"codesign","cn":"release-signer"}  또는  {"serial":"AB12...","reason":"key compromise"}'></textarea>
+        <button class="act" onclick="doApprCreate()">요청 생성</button>
+        <div id="a-out" class="out hidden"></div>
+      </div>
+    </div></div>`));
+  const rows=(approvals||[]).map(a=>{
+    const params = esc(JSON.stringify(a.params||{}));
+    const act = a.status==='pending'
+      ? `<button class="ghost" onclick="doApprApprove('${a.id}')">승인</button> <button class="ghost" onclick="doApprReject('${a.id}')">반려</button>`
+      : (a.result?esc(JSON.stringify(a.result)):esc(a.note||''));
+    return `<tr><td class="mono">${a.id}</td><td>${esc(a.action)}</td><td class="mono">${params}</td><td>${esc(a.requester)}</td>
+      <td><span class="tag ${a.status==='executed'?'valid':(a.status==='rejected'?'revoked':'')}">${a.status}</span></td>
+      <td>${esc(a.decider||'')}</td><td>${act}</td></tr>`;
+  }).join('');
+  m.append(el(`<div class="card"><h2>요청 목록</h2>
+    <table><tr><th>ID</th><th>종류</th><th>파라미터</th><th>요청자</th><th>상태</th><th>승인자</th><th></th></tr>${rows||'<tr><td colspan=7>요청 없음</td></tr>'}</table></div>`));
+};
+window.doApprCreate = async () => {
+  const o=document.getElementById('a-out'); o.classList.remove('hidden');
+  let params={}; try{ params=JSON.parse(document.getElementById('a-params').value||'{}'); }catch(e){ o.textContent='파라미터 JSON 오류'; return; }
+  try{ const r=await api('/api/approvals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:document.getElementById('a-action').value, params})}); o.textContent='요청 생성: '+r.id; views.approvals(); }catch(e){ o.textContent='오류: '+e.message; }
+};
+window.doApprApprove = async (id) => {
+  if(!confirm('승인하고 실행하시겠습니까? (요청자와 동일 신원이면 거부됩니다)')) return;
+  try{ const r=await api('/api/approvals/'+id+'/approve',{method:'POST'}); alert('실행됨: '+JSON.stringify(r.result)); views.approvals(); }catch(e){ alert(e.message); }
+};
+window.doApprReject = async (id) => {
+  const note=prompt('반려 사유:','')||'';
+  try{ await api('/api/approvals/'+id+'/reject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note})}); views.approvals(); }catch(e){ alert(e.message); }
+};
+
+views.audit = async () => {
+  const m = document.getElementById('main'); m.innerHTML='';
+  const {events, integrity} = await api('/api/ca/audit');
+  const ib = integrity && integrity.ok ? `<span class="dot ok"></span>해시체인 무결 (${integrity.count}건)` : `<span class="dot bad"></span>변조 의심 (seq ${integrity&&integrity.brokenAt})`;
+  const rows=(events||[]).map(e=>`<tr><td class="mono">${e.seq}</td><td class="mono">${esc(e.time)}</td><td>${esc(e.actor)}</td><td>${esc(e.action)}</td><td class="mono">${esc(e.serial||'')}</td><td>${esc(e.status||'')}</td></tr>`).join('');
+  m.append(el(`<div class="card"><h2>감사 로그 (변조 탐지 해시체인)</h2>
+    <p class="desc">발급·폐기·서명·검증 등 모든 행위가 append-only 해시체인으로 기록됩니다. 한 줄이라도 변조되면 검증이 깨집니다.</p>
+    <p>${ib}</p>
+    <table><tr><th>#</th><th>시각</th><th>행위자</th><th>행위</th><th>시리얼</th><th>상태</th></tr>${rows||'<tr><td colspan=6>기록 없음</td></tr>'}</table></div>`));
+};
+
+views.manual = async () => { document.getElementById('main').innerHTML = MANUAL; };
+
+function render(){
+  document.getElementById('nav').innerHTML = tabs.map(([k,l])=>`<button class="${k===active?'active':''}" onclick="go('${k}')">${l}</button>`).join('');
+  views[active]().catch(e=>{ document.getElementById('main').innerHTML='<div class="card"><h2>오류</h2><p class="note">'+esc(e.message)+'</p></div>'; });
+}
+window.go = (k)=>{ active=k; render(); };
+
+refreshStat(); setInterval(refreshStat, 15000); render();
+</script>
+<script src="manual.js"></script>
+</body>
+</html>

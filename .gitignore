@@ -1,0 +1,13 @@
+# 빌드 산출물
+/deploy/bigfoot-linux
+*.test
+
+# 런타임 생성 CA 자산 — 절대 커밋 금지 (비밀/신뢰앵커, bootstrap 이 생성)
+/deploy/stepca/ca-password
+/deploy/stepca/root_ca.crt
+/deploy/stepca/issuer_ca.crt
+/deploy/backups/
+
+# 로컬 TLS 키(있다면)
+/deploy/stepca/tls.key
+/deploy/stepca/tls.crt
