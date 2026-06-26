@@ -119,7 +119,8 @@ func (s *Server) apiRecipientsList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"recipients": rs})
+	page, size := pageParams(r, 20)
+	writeJSON(w, 200, map[string]any{"recipients": pageSlice(rs, page, size), "total": len(rs), "page": page, "pageSize": size})
 }
 
 // POST /api/recipients {cert} — 외부 수신자 공개 인증서 임포트(파싱·검증 후 저장).

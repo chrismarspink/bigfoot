@@ -38,6 +38,8 @@
   .out { background:#0c0e12; border:1px solid var(--line); border-radius:7px; padding:10px; margin-top:12px; white-space:pre-wrap; font-family:ui-monospace,Menlo,monospace; font-size:12px; max-height:280px; overflow:auto; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   .hidden { display:none; }
+  .pager { display:flex; gap:12px; align-items:center; margin-top:14px; font-size:12px; color:var(--mut); }
+  button.ghost:disabled { opacity:.4; cursor:default; }
   .manual h3 { margin:18px 0 6px; font-size:14px; }
   .manual h3:first-child { margin-top:0; }
   .manual code { background:#0c0e12; padding:1px 5px; border-radius:4px; font-size:12px; }
@@ -64,6 +66,18 @@ const tabs = [
   ['sign','파일 서명'], ['recipients','수신자'], ['approvals','승인'], ['audit','감사'], ['manual','매뉴얼'],
 ];
 let active = 'overview';
+const PAGE_SIZE = 20;
+const pageState = { certs:1, audit:1, recipients:1, approvals:1 };
+function pagerHTML(key, page, total){
+  const pages = Math.max(1, Math.ceil((total||0)/PAGE_SIZE));
+  if ((total||0) <= PAGE_SIZE) return '';
+  return `<div class="pager">
+    <button class="ghost" ${page<=1?'disabled':''} onclick="goPage('${key}',${page-1})">‹ 이전</button>
+    <span>${page} / ${pages} · 총 ${total}건</span>
+    <button class="ghost" ${page>=pages?'disabled':''} onclick="goPage('${key}',${page+1})">다음 ›</button>
+  </div>`;
+}
+window.goPage = (key, p) => { if(p<1) return; pageState[key]=p; views[key](); };
 
 async function api(path, opts={}) {
   const r = await fetch(API+path, opts);
@@ -113,7 +127,8 @@ views.overview = async () => {
 
 views.certs = async () => {
   const m = document.getElementById('main'); m.innerHTML='';
-  const {certs} = await api('/api/ca/certs');
+  const p = pageState.certs;
+  const {certs, total} = await api('/api/ca/certs?page='+p+'&pageSize='+PAGE_SIZE);
   const rows = (certs||[]).map(c=>`<tr>
     <td class="mono">${esc(c.serial)}</td><td>${esc(c.subject)}</td><td>${esc(c.profile||'-')}</td>
     <td class="mono">${esc(c.notAfter)}</td><td><span class="tag ${c.status}">${c.status}</span></td>
@@ -121,7 +136,7 @@ views.certs = async () => {
   </tr>`).join('');
   m.append(el(`<div class="card"><h2>발급 인증서</h2>
     <p class="desc">SoR(감사 기록) 기반 목록. 폐기 시 CRL 에 반영됩니다.</p>
-    <table><tr><th>시리얼</th><th>주체</th><th>프로파일</th><th>만료</th><th>상태</th><th></th></tr>${rows||'<tr><td colspan=6 class=mut>발급 이력 없음</td></tr>'}</table></div>`));
+    <table><tr><th>시리얼</th><th>주체</th><th>프로파일</th><th>만료</th><th>상태</th><th></th></tr>${rows||'<tr><td colspan=6 class=mut>발급 이력 없음</td></tr>'}</table>${pagerHTML('certs', p, total)}</div>`));
 };
 window.doRevoke = async (serial) => {
   if(!confirm('인증서 '+serial+' 를 폐기하시겠습니까? (CRL 반영)')) return;
@@ -178,7 +193,7 @@ views.sign = async () => {
     <label>.p7s 파일</label><input type="file" id="v-file">
     <button class="act" onclick="doVerify()">검증</button>
     <div id="v-out" class="out hidden"></div></div>`));
-  let recips=[]; try{ recips=(await api('/api/recipients')).recipients||[]; }catch(e){}
+  let recips=[]; try{ recips=(await api('/api/recipients?pageSize=200')).recipients||[]; }catch(e){}
   const ropts = recips.map(r=>`<label style="color:var(--fg)"><input type=checkbox value="${r.id}"> ${esc(r.subject)}</label>`).join('')||'<span class="note">수신자 탭에서 인증서를 먼저 임포트하세요.</span>';
   m.append(el(`<div class="card"><h2>서명+암호화 패키지 (.p7m)</h2>
     <p class="desc">파일을 서명 후 선택한 수신자 공개 인증서로 암호화(.p7m). 수신자만 복호할 수 있습니다.</p>
@@ -215,7 +230,8 @@ window.doEncrypt = async () => {
 
 views.recipients = async () => {
   const m = document.getElementById('main'); m.innerHTML='';
-  const {recipients} = await api('/api/recipients');
+  const p = pageState.recipients;
+  const {recipients, total} = await api('/api/recipients?page='+p+'&pageSize='+PAGE_SIZE);
   const rows=(recipients||[]).map(r=>`<tr><td>${esc(r.subject)}</td><td class="mono">${esc(r.notAfter)}</td><td class="mono">${esc(r.id.slice(0,16))}…</td><td><button class="ghost" onclick="doDelRecip('${r.id}')">삭제</button></td></tr>`).join('');
   m.append(el(`<div class="card"><h2>수신자 인증서 임포트</h2>
     <p class="desc">외부 수신자의 공개 인증서(PEM)를 등록합니다. 개인키는 보관하지 않습니다. 암호화 패키지(.p7m)의 수신자로 사용됩니다.</p>
@@ -223,7 +239,7 @@ views.recipients = async () => {
     <button class="act" onclick="doImportRecip()">임포트</button>
     <div id="r-out" class="out hidden"></div></div>`));
   m.append(el(`<div class="card"><h2>등록된 수신자</h2>
-    <table><tr><th>주체</th><th>만료</th><th>지문</th><th></th></tr>${rows||'<tr><td colspan=4>없음</td></tr>'}</table></div>`));
+    <table><tr><th>주체</th><th>만료</th><th>지문</th><th></th></tr>${rows||'<tr><td colspan=4>없음</td></tr>'}</table>${pagerHTML('recipients', p, total)}</div>`));
 };
 window.doImportRecip = async () => {
   const o=document.getElementById('r-out'); o.classList.remove('hidden');
@@ -233,7 +249,8 @@ window.doDelRecip = async (id) => { if(!confirm('삭제?'))return; await api('/a
 
 views.approvals = async () => {
   const m = document.getElementById('main'); m.innerHTML='';
-  const {approvals, enforce} = await api('/api/approvals');
+  const p = pageState.approvals;
+  const {approvals, enforce, total} = await api('/api/approvals?page='+p+'&pageSize='+PAGE_SIZE);
   m.append(el(`<div class="card"><h2>발급/폐기 요청 (4-eyes)</h2>
     <p class="desc">요청을 생성하면 ${enforce?'<b>(직접 발급 차단됨 — 승인 필수)</b> ':''}다른 사람이 승인해야 실행됩니다. 요청자와 승인자는 동일할 수 없습니다.</p>
     <div class="grid2">
@@ -254,7 +271,7 @@ views.approvals = async () => {
       <td>${esc(a.decider||'')}</td><td>${act}</td></tr>`;
   }).join('');
   m.append(el(`<div class="card"><h2>요청 목록</h2>
-    <table><tr><th>ID</th><th>종류</th><th>파라미터</th><th>요청자</th><th>상태</th><th>승인자</th><th></th></tr>${rows||'<tr><td colspan=7>요청 없음</td></tr>'}</table></div>`));
+    <table><tr><th>ID</th><th>종류</th><th>파라미터</th><th>요청자</th><th>상태</th><th>승인자</th><th></th></tr>${rows||'<tr><td colspan=7>요청 없음</td></tr>'}</table>${pagerHTML('approvals', p, total)}</div>`));
 };
 window.doApprCreate = async () => {
   const o=document.getElementById('a-out'); o.classList.remove('hidden');
@@ -272,13 +289,14 @@ window.doApprReject = async (id) => {
 
 views.audit = async () => {
   const m = document.getElementById('main'); m.innerHTML='';
-  const {events, integrity} = await api('/api/ca/audit');
+  const p = pageState.audit;
+  const {events, integrity, total} = await api('/api/ca/audit?page='+p+'&pageSize='+PAGE_SIZE);
   const ib = integrity && integrity.ok ? `<span class="dot ok"></span>해시체인 무결 (${integrity.count}건)` : `<span class="dot bad"></span>변조 의심 (seq ${integrity&&integrity.brokenAt})`;
   const rows=(events||[]).map(e=>`<tr><td class="mono">${e.seq}</td><td class="mono">${esc(e.time)}</td><td>${esc(e.actor)}</td><td>${esc(e.action)}</td><td class="mono">${esc(e.serial||'')}</td><td>${esc(e.status||'')}</td></tr>`).join('');
   m.append(el(`<div class="card"><h2>감사 로그 (변조 탐지 해시체인)</h2>
     <p class="desc">발급·폐기·서명·검증 등 모든 행위가 append-only 해시체인으로 기록됩니다. 한 줄이라도 변조되면 검증이 깨집니다.</p>
     <p>${ib}</p>
-    <table><tr><th>#</th><th>시각</th><th>행위자</th><th>행위</th><th>시리얼</th><th>상태</th></tr>${rows||'<tr><td colspan=6>기록 없음</td></tr>'}</table></div>`));
+    <table><tr><th>#</th><th>시각</th><th>행위자</th><th>행위</th><th>시리얼</th><th>상태</th></tr>${rows||'<tr><td colspan=6>기록 없음</td></tr>'}</table>${pagerHTML('audit', p, total)}</div>`));
 };
 
 views.manual = async () => { document.getElementById('main').innerHTML = MANUAL; };

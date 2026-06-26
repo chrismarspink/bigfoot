@@ -320,7 +320,9 @@ func (s *Server) apiCACerts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 503, map[string]string{"error": "CA 미구성"})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"certs": s.ca.ListCerts()})
+	all := s.ca.ListCerts()
+	page, size := pageParams(r, 20)
+	writeJSON(w, 200, map[string]any{"certs": pageSlice(all, page, size), "total": len(all), "page": page, "pageSize": size})
 }
 
 // GET /api/ca/audit — SoR 감사 이벤트(최신순) + 해시체인 검증 결과.
@@ -334,7 +336,8 @@ func (s *Server) apiCAAudit(w http.ResponseWriter, r *http.Request) {
 	for i, j := 0, len(evs)-1; i < j; i, j = i+1, j-1 {
 		evs[i], evs[j] = evs[j], evs[i]
 	}
-	writeJSON(w, 200, map[string]any{"events": evs, "integrity": vr})
+	page, size := pageParams(r, 20)
+	writeJSON(w, 200, map[string]any{"events": pageSlice(evs, page, size), "integrity": vr, "total": len(evs), "page": page, "pageSize": size})
 }
 
 // GET /api/ca/audit/verify — 감사 해시체인 무결성 검증(변조 탐지).

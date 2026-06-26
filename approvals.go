@@ -111,7 +111,8 @@ func (s *Server) apiApprovalList(w http.ResponseWriter, r *http.Request) {
 	for i, j := 0, len(as)-1; i < j; i, j = i+1, j-1 {
 		as[i], as[j] = as[j], as[i]
 	}
-	writeJSON(w, 200, map[string]any{"approvals": as, "enforce": s.cfg.EnforceApproval})
+	page, size := pageParams(r, 20)
+	writeJSON(w, 200, map[string]any{"approvals": pageSlice(as, page, size), "enforce": s.cfg.EnforceApproval, "total": len(as), "page": page, "pageSize": size})
 }
 
 // POST /api/approvals/{id}/approve — 승인+실행. 요청자≠승인자 강제.

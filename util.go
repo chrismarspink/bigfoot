@@ -1,9 +1,40 @@
 package main
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 )
+
+// pageParams: ?page=(1-based)&pageSize= 파싱. 기본 size=def, 상한 200.
+func pageParams(r *http.Request, def int) (page, size int) {
+	page, _ = strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	size, _ = strconv.Atoi(r.URL.Query().Get("pageSize"))
+	if size < 1 {
+		size = def
+	}
+	if size > 200 {
+		size = 200
+	}
+	return
+}
+
+// pageSlice: items 에서 page/size 구간 반환(범위 밖이면 빈 슬라이스, nil 아님).
+func pageSlice[T any](items []T, page, size int) []T {
+	start := (page - 1) * size
+	if start >= len(items) {
+		return []T{}
+	}
+	end := start + size
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end]
+}
 
 // readFileOrEmpty: 파일을 읽되 없으면 빈 바이트(에러 아님).
 func readFileOrEmpty(path string) ([]byte, error) {
